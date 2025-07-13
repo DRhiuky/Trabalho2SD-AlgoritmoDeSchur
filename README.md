@@ -121,6 +121,3 @@ Após a execução, os seguintes arquivos serão gerados:
   - Comparação entre os tempos de execução serial (NumPy local) e paralela (workers Pyro5);
   - Speedup obtido;
   - Resultados numéricos e validação da inversa.
-
-> **Observação:**  
-> Espera-se que o tempo de execução paralela seja superior ao tempo serial. Esse comportamento mostra que em algoritmos com alta eficiência local (como os do NumPy), os custos de serialização e comunicação em rede superam os ganhos da paralelização.
