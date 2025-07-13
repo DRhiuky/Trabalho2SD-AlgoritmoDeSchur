@@ -1,0 +1,9 @@
+numpy
+Pyro5
+msgpack
+
+# sudo apt update && sudo apt upgrade -y
+# sudo apt install python3-pip
+# python3 -m venv venv
+# source venv/bin/activate
+# pip3 install -r requirements.txt
