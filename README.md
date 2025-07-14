@@ -87,13 +87,7 @@ No terminal da máquina designada como Servidor de Nomes:
 - Execução local:
 
 ```bash
-pyro5-ns --serializer msgpack
-```
-
-- Execução remota (com IP da máquina):
-
-```bash
-pyro5-ns --serializer msgpack -H 192.168.1.100
+pyro5-ns
 ```
 
 Manter esse terminal em execução.
