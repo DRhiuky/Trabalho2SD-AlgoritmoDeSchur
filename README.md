@@ -1,49 +1,41 @@
 #### nome: Luiz Augusto Bello Marques dos Anjos
 #### matrícula: 202010242
 
-### Trabalho para a Disciplina de Sistemas Distribuidos do curso de Ciência da Computação da UESC
-
-# Análise de Desempenho de Cálculo de Matrizes em Paralelo
+# Trabalho para a Disciplina de Sistemas Distribuidos do curso de Ciência da Computação da UESC
 
 Este projeto implementa e analisa o cálculo do determinante e da inversa de matrizes quadradas em um ambiente distribuído. O objetivo principal é demonstrar o uso de algoritmos de divisão e conquista, como a fórmula de Schur para o determinante e a inversão por blocos, e avaliar o desempenho da execução paralela em comparação com uma execução serial otimizada.
+
+---
 
 ## 1. Visão Geral do Projeto
 
 O sistema utiliza uma arquitetura cliente-servidor (modelo cliente-worker) com a biblioteca **Pyro5** para comunicação entre processos.
 
-- **client.py**: Arquivo responsável por gerar a matriz, iniciar os cálculos (serial local e paralelo remoto) e gerar o relatório de desempenho com a comparação dos tempos de execução.
+- `configIP.py`: Define o endereço IP do Servidor de Nomes, facilitando a alternância entre testes locais e remotos.
 
-- **worker.py**: Processo executado em múltiplas instâncias (inclusive em diferentes máquinas na mesma rede). Cada worker se registra no servidor de nomes e aguarda tarefas. Contém a lógica de divisão do problema e pode delegar subtarefas a outros workers disponíveis no sistema.
+- `client.py`: Gera a matriz, inicia os cálculos (serial local e paralelo remoto) e gera o relatório de desempenho com a comparação dos tempos de execução.
+
+- `worker.py`: Processo executado em múltiplas instâncias, inclusive em diferentes máquinas da mesma rede. Cada worker se registra no servidor de nomes e aguarda tarefas. Contém a lógica de divisão do problema e pode delegar subtarefas a outros workers disponíveis.
+
+---
 
 ## 2. Algoritmos e Otimizações
 
-### 2.1. Algoritmos de Divisão e Conquista
-
-**Determinante (Fórmula de Schur):**  
-O determinante de uma matriz `M` dividida em quatro blocos (`A`, `B`, `C`, `D`) é calculado recursivamente pela fórmula:
-
-    det(M) = det(A) * det(D - C * A⁻¹ * B)
-
-Os cálculos de `det(A)` e `inv(A)` são distribuídos para execução paralela em diferentes workers.
-
-**Inversa por Blocos:**  
-A inversa de `M` é obtida recursivamente, com as inversões das submatrizes `A` e do complemento de Schur `S` delegadas a outros workers.
-
-### 2.2. Otimizações Implementadas
-
 As seguintes otimizações foram aplicadas para tornar o sistema mais eficiente e robusto:
 
-- **Serialização com msgpack:**  
-  Substitui o serializador padrão do Pyro5 (`serpent`) por `msgpack`, um formato binário mais rápido e compacto, reduzindo o tempo de envio dos arrays NumPy pela rede.
+- **Serialização com `msgpack`**  
+  Substitui o serializador padrão do Pyro5 (`serpent`) por `msgpack`, um formato binário mais rápido e compacto.
 
-- **Cache de Resultados:**  
-  Implementa cache interno em cada worker. Caso uma submatriz já tenha sido processada anteriormente, o resultado é retornado diretamente da memória, evitando recálculos e tráfego desnecessário.
+- **Cache de Resultados**  
+  Implementa cache interno em cada worker, evitando recálculos desnecessários.
 
-- **Cálculo de Log-Determinante:**  
-  Utiliza `numpy.linalg.slogdet` para evitar overflow numérico em matrizes grandes. O valor do logaritmo do determinante é exibido em notação científica.
+- **Cálculo de Log-Determinante**  
+  Utiliza `numpy.linalg.slogdet` para evitar overflow numérico em matrizes grandes.
 
-- **Balanceamento de Carga Aleatório:**  
-  Subtarefas são delegadas de forma aleatória entre os workers disponíveis, promovendo uma distribuição de carga mais equilibrada.
+- **Balanceamento de Carga Aleatório**  
+  Subtarefas são delegadas de forma aleatória entre os workers disponíveis, distribuindo melhor a carga de trabalho.
+
+---
 
 ## 3. Como Executar o Projeto
 
@@ -54,16 +46,11 @@ As seguintes otimizações foram aplicadas para tornar o sistema mais eficiente 
 
 ### 3.2. Instalação das Dependências
 
-Criar um ambiente virtual:
+Criar um ambiente virtual e instalar os pacotes:
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-```
-
-Instalar as dependências listadas em `requirements.txt`:
-
-```bash
 pip install -r requirements.txt
 ```
 
@@ -75,40 +62,69 @@ Pyro5
 msgpack
 ```
 
-### 3.3. Execução do Sistema
+### 3.3. Configuração da Rede
 
-Utilizar múltiplos terminais para executar o sistema.
+Editar o arquivo `configIP.py` para definir o IP do Servidor de Nomes.
+
+- Para testes locais:
+
+```python
+IP_SERVIDOR_NOMES = 'localhost'
+```
+
+- Para testes remotos (substituir pelo IP real do Servidor de Nomes):
+
+```python
+IP_SERVIDOR_NOMES = '192.168.1.100'
+```
+
+### 3.4. Execução do Sistema
 
 #### Passo 1: Iniciar o Servidor de Nomes
 
-Iniciar o Name Server
+No terminal da máquina designada como Servidor de Nomes:
+
+- Execução local:
 
 ```bash
-pyro5-ns
+pyro5-ns --serializer msgpack
 ```
 
-Manter o terminal em execução.
+- Execução remota (com IP da máquina):
+
+```bash
+pyro5-ns --serializer msgpack -H 192.168.1.100
+```
+
+Manter esse terminal em execução.
 
 #### Passo 2: Iniciar os Workers
 
-Iniciar cada worker com um ID único:
+Em cada máquina que atuará como worker, obter o IP da própria máquina.
+
+- Exemplo local:
 
 ```bash
-python worker.py 1
-python worker.py 2
-python worker.py 3
-...
+python worker.py 1 --host localhost
 ```
 
-Workers ficarão aguardando por tarefas e poderão delegar cálculos entre si.
+- Exemplo remoto:
+
+```bash
+python worker.py 2 --host 192.168.1.101
+```
+
+Iniciar quantos workers forem necessários, cada um com um ID único e o próprio endereço IP.
 
 #### Passo 3: Executar o Cliente
 
-Iniciar o cliente para realizar os cálculos e gerar os relatórios:
+Em qualquer máquina da rede:
 
 ```bash
 python client.py
 ```
+
+---
 
 ## 4. Análise dos Resultados
 
@@ -116,8 +132,9 @@ Após a execução, os seguintes arquivos serão gerados:
 
 - `matriz_original.txt`: Matriz N x N utilizada no teste.  
 - `matriz_inversa.txt`: Inversa da matriz calculada de forma distribuída.  
-- `relatorio_desempenho.txt`: Relatório contendo:
-  - Configuração do teste (tamanho da matriz, número de workers);
-  - Comparação entre os tempos de execução serial (NumPy local) e paralela (workers Pyro5);
+- `relatorio_desempenho.txt`: Relatório com a análise de desempenho, incluindo:
+
+  - Tamanho da matriz e número de workers;
+  - Comparação entre tempo serial e paralelo;
   - Speedup obtido;
-  - Resultados numéricos e validação da inversa.
+  - Verificação da correção da inversa.

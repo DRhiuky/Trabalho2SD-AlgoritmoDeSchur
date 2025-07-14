@@ -6,54 +6,58 @@ import queue
 import random
 import sys
 import os
+import argparse
+from configIP import IP_SERVIDOR_NOMES
 
 # --- Configuração do Serializador Otimizado ---
 Pyro5.config.SERIALIZER = "msgpack"
 
 # --- Utilitários de Cache ---
 def gerar_hash_da_matriz(matriz):
-    """Gera um identificador único para uma matriz para ser usado como chave no cache."""
     return hash(matriz.tobytes())
 
 # --- Adaptadores para o NumPy ---
-def numpy_para_dicionario(objeto_numpy):
+def adaptador_numpy_para_dicionario(objeto_numpy):
     return {
         "__class__": "numpy.ndarray",
         "dtype": objeto_numpy.dtype.str,
         "data": objeto_numpy.tolist(),
     }
 
-def dicionario_para_numpy(nome_da_classe, dicionario):
+def adaptador_dicionario_para_numpy(nome_da_classe, dicionario):
     if nome_da_classe == "numpy.ndarray":
         return np.array(dicionario["data"], dtype=np.dtype(dicionario["dtype"]))
     return dicionario
 
-Pyro5.api.register_class_to_dict(np.ndarray, numpy_para_dicionario)
-Pyro5.api.register_dict_to_class("numpy.ndarray", dicionario_para_numpy)
+Pyro5.api.register_class_to_dict(np.ndarray, adaptador_numpy_para_dicionario)
+Pyro5.api.register_dict_to_class("numpy.ndarray", adaptador_dicionario_para_numpy)
 
 # --- Configurações do Algoritmo ---
-TAMANHO_MINIMO_RECURSAO = 64 # Matrizes menores que isso são resolvidas diretamente.
+TAMANHO_MINIMO_RECURSAO = 64
 
 def obter_trabalhador_aleatorio():
-    """Encontra e retorna uma conexão (proxy) para um trabalhador aleatório."""
-    servidor_de_nomes = Pyro5.api.locate_ns()
-    nomes_dos_trabalhadores = [nome for nome in servidor_de_nomes.list(prefix="calculadora.matricial.").keys()]
+    """Encontra e retorna uma conexão para um trabalhador aleatório."""
+    servidor_de_nomes = Pyro5.api.locate_ns(host=IP_SERVIDOR_NOMES)
+    nomes_dos_trabalhadores = [nome for nome in servidor_de_nomes.list(prefix="calculadoramatriz.").keys()]
     if not nomes_dos_trabalhadores:
         raise RuntimeError("Nenhum trabalhador disponível foi encontrado no Servidor de Nomes.")
     nome_escolhido = random.choice(nomes_dos_trabalhadores)
-    return Pyro5.api.Proxy(f"PYRONAME:{nome_escolhido}")
+    return Pyro5.api.Proxy(f"PYRONAME:{nome_escolhido}@{IP_SERVIDOR_NOMES}")
 
 @Pyro5.api.expose
-@Pyro5.api.behavior(instance_mode="single") # Garante que cada processo tenha um único objeto, para que o cache funcione.
-class CalculadoraMatricialDistribuida:
-    """
-    O objeto "trabalhador" que efetivamente realiza os cálculos.
-    Ele implementa os algoritmos de forma recursiva e distribuída.
-    """
+@Pyro5.api.behavior(instance_mode="single")
+class CalculadoraMatriz:
+    """O objeto "trabalhador" que efetivamente realiza os cálculos."""
     def __init__(self):
         self.cache_de_inversas = {}
         self.cache_de_log_determinantes = {}
         print(f"Trabalhador iniciado (PID: {os.getpid()}). Cache está vazio.")
+
+    def limpar_cache(self):
+        """Limpa os caches de resultados do trabalhador."""
+        self.cache_de_inversas.clear()
+        self.cache_de_log_determinantes.clear()
+        return True
 
     def multiplicar(self, A, B):
         print(f"  PID {os.getpid()}: Multiplicando {A.shape} x {B.shape}")
@@ -85,7 +89,6 @@ class CalculadoraMatricialDistribuida:
         proxy = obter_trabalhador_aleatorio()
         inversa_do_complemento_Schur = proxy.calcular_inversa(complemento_Schur)
         
-        # Montagem da inversa final por blocos
         bloco1 = self.multiplicar(inversa_de_A, B)
         bloco2 = self.multiplicar(C, inversa_de_A)
         
@@ -130,13 +133,11 @@ class CalculadoraMatricialDistribuida:
             resultado = proxy.calcular_inversa(A)
             fila_de_resultados.put(('inversa_A', resultado))
 
-        # Inicia as duas tarefas independentes em paralelo
         thread_determinante = threading.Thread(target=tarefa_calcular_log_determinante_de_A)
         thread_inversa = threading.Thread(target=tarefa_calcular_inversa_de_A)
         thread_determinante.start()
         thread_inversa.start()
 
-        # Aguarda e coleta os resultados
         resultados_paralelos = {}
         for _ in range(2):
             chave, valor = fila_de_resultados.get()
@@ -145,14 +146,11 @@ class CalculadoraMatricialDistribuida:
         (sinal_de_A, log_determinante_de_A) = resultados_paralelos['log_det_A']
         inversa_de_A = resultados_paralelos['inversa_A']
 
-        # Calcula o complemento de Schur
         complemento_Schur = D - self.multiplicar(self.multiplicar(C, inversa_de_A), B)
 
-        # Delega o cálculo do determinante do complemento de Schur
         proxy = obter_trabalhador_aleatorio()
         (sinal_de_S, log_determinante_de_S) = proxy.calcular_log_determinante(complemento_Schur)
 
-        # Combina os resultados usando a propriedade dos logaritmos
         sinal_final = sinal_de_A * sinal_de_S
         log_determinante_final = log_determinante_de_A + log_determinante_de_S
         
@@ -162,22 +160,21 @@ class CalculadoraMatricialDistribuida:
 
 def main():
     """Função principal que inicia o processo do trabalhador."""
-    if len(sys.argv) < 2:
-        print("Erro: Forneça um ID único para este trabalhador.")
-        print("Uso: python trabalhador.py <id>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Trabalhador para cálculo distribuído de matrizes.")
+    parser.add_argument("id_trabalhador", help="O ID único para este trabalhador (ex: 1, 2, etc.).")
+    parser.add_argument("--host", required=True, help="O endereço IP que este trabalhador deve usar para ser contactado (o seu próprio IP).")
+    args = parser.parse_args()
 
-    id_do_trabalhador = sys.argv[1]
-    nome_do_trabalhador = f"calculadora.matricial.{id_do_trabalhador}"
+    id_do_trabalhador = args.id_trabalhador
+    nome_do_trabalhador = f"calculadoramatriz.{id_do_trabalhador}"
 
-    Pyro5.config.SERVERTYPE = "thread"
-    daemon = Pyro5.server.Daemon()
-    servidor_de_nomes = Pyro5.api.locate_ns()
+    daemon = Pyro5.server.Daemon(host=args.host)
+    servidor_de_nomes = Pyro5.api.locate_ns(host=IP_SERVIDOR_NOMES)
     
-    uri = daemon.register(CalculadoraMatricialDistribuida)
+    uri = daemon.register(CalculadoraMatriz)
     servidor_de_nomes.register(nome_do_trabalhador, uri)
 
-    print(f"Trabalhador '{nome_do_trabalhador}' pronto (PID: {os.getpid()}).")
+    print(f"Trabalhador '{nome_do_trabalhador}' pronto em {uri}. (PID: {os.getpid()})")
     daemon.requestLoop()
 
 if __name__ == "__main__":

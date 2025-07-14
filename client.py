@@ -3,81 +3,72 @@ import Pyro5.api
 import time
 import itertools
 import math
+from configIP import IP_SERVIDOR_NOMES
 
 # --- Configuração do Serializador Otimizado ---
-# Define o 'msgpack' como o protocolo de comunicação, por ser mais rápido.
 Pyro5.config.SERIALIZER = "msgpack"
 
 # --- Configurações Gerais da Análise ---
-# Define o tamanho da matriz a ser gerada. Deve ser uma potência de 2 para garantir que o algoritmo funcione corretamente.
-# O tamanho mínimo recomendado é 64, mas pode ser ajustado conforme necessário.
-# Para testes de desempenho, é interessante usar tamanhos maiores, como 256, 512 ou 1024.
-# Atenção: Matrizes muito grandes podem exigir mais memória e tempo de processamento.
-# Casos de teste sugeridos: 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024
 TAMANHO_DA_MATRIZ = 1024
 NOME_ARQUIVO_RELATORIO = "relatorio_desempenho.txt"
 NOME_ARQUIVO_MATRIZ_ORIGINAL = "matriz_original.txt"
 NOME_ARQUIVO_MATRIZ_INVERSA = "matriz_inversa.txt"
 
 # --- Adaptadores para o NumPy ---
-# Ensina o Pyro5 a converter arrays NumPy para um formato que pode ser enviado pela rede.
-def numpy_para_dicionario(objeto_numpy):
+def adaptador_numpy_para_dicionario(objeto_numpy):
     return {
         "__class__": "numpy.ndarray",
         "dtype": objeto_numpy.dtype.str,
         "data": objeto_numpy.tolist(),
     }
 
-def dicionario_para_numpy(nome_da_classe, dicionario):
+def adaptador_dicionario_para_numpy(nome_da_classe, dicionario):
     if nome_da_classe == "numpy.ndarray":
         return np.array(dicionario["data"], dtype=np.dtype(dicionario["dtype"]))
     return dicionario
 
-Pyro5.api.register_class_to_dict(np.ndarray, numpy_para_dicionario)
-Pyro5.api.register_dict_to_class("numpy.ndarray", dicionario_para_numpy)
+Pyro5.api.register_class_to_dict(np.ndarray, adaptador_numpy_para_dicionario)
+Pyro5.api.register_dict_to_class("numpy.ndarray", adaptador_dicionario_para_numpy)
 
 class GrupoDeTrabalhadores:
-    """Esta classe encontra e gerencia todos os trabalhadores (workers) disponíveis."""
+    """Esta classe encontra e gerencia todos os trabalhadores disponíveis."""
     def __init__(self):
-        servidor_de_nomes = Pyro5.api.locate_ns()
-        nomes_dos_trabalhadores = sorted(servidor_de_nomes.list(prefix="calculadora.matricial.").keys())
+        servidor_de_nomes = Pyro5.api.locate_ns(host=IP_SERVIDOR_NOMES)
+        nomes_dos_trabalhadores = sorted(servidor_de_nomes.list(prefix="calculadoramatriz.").keys())
         if not nomes_dos_trabalhadores:
             raise RuntimeError("Nenhum trabalhador disponível foi encontrado no Servidor de Nomes.")
         
         print(f"Trabalhadores encontrados: {', '.join(nomes_dos_trabalhadores)}")
-        # Cria um "proxy" para cada trabalhador. Um proxy é um objeto local que representa o trabalhador remoto.
-        self.lista_de_trabalhadores = [Pyro5.api.Proxy(f"PYRONAME:{nome}") for nome in nomes_dos_trabalhadores]
+        self.lista_de_trabalhadores = [Pyro5.api.Proxy(f"PYRONAME:{nome}@{IP_SERVIDOR_NOMES}") for nome in nomes_dos_trabalhadores]
         for trabalhador in self.lista_de_trabalhadores:
-            trabalhador._pyroBind() # Testa a conexão com cada um.
-        # Cria um ciclo para distribuir as tarefas de forma equilibrada (round-robin).
+            trabalhador._pyroBind()
         self._ciclo_de_trabalhadores = itertools.cycle(self.lista_de_trabalhadores)
 
     def obter_trabalhador(self):
-        """Retorna o próximo trabalhador da fila."""
+        """Retorna o próximo trabalhador da fila para distribuir a carga."""
         return next(self._ciclo_de_trabalhadores)
+
+    def obter_todos_os_trabalhadores(self):
+        """Retorna uma lista com todos os trabalhadores."""
+        return self.lista_de_trabalhadores
 
     def total(self):
         return len(self.lista_de_trabalhadores)
 
 
 def gerar_matriz_invertivel(tamanho):
-    """Gera uma matriz quadrada que com certeza tem inversa."""
     print(f"Gerando matriz invertível de tamanho {tamanho}x{tamanho}...")
     matriz = np.random.rand(tamanho, tamanho)
-    # Tornar a matriz diagonalmente dominante garante que o determinante não seja zero.
     matriz += np.eye(tamanho) * tamanho
     print("Matriz gerada com sucesso.")
     return matriz
 
-def formatar_determinante_exibicao(sinal, log_determinante):
-    """Converte o log-determinante para notação científica (ex: 1.23e+100)."""
+def formatar_determinante_para_exibicao(sinal, log_determinante):
     if sinal == 0:
         return "0.0"
-    
     log10_determinante = log_determinante / math.log(10)
     expoente = math.floor(log10_determinante)
     mantissa = 10**(log10_determinante - expoente)
-    
     return f"{sinal * mantissa:.4f}e+{expoente}"
 
 
@@ -92,6 +83,10 @@ def main():
     except Exception as e:
         print(f"Erro ao conectar aos trabalhadores: {e}")
         return
+
+    # --- Limpeza de Cache ---
+    for trabalhador in grupo_de_trabalhadores.obter_todos_os_trabalhadores():
+        trabalhador.limpar_cache()
 
     matriz_principal = gerar_matriz_invertivel(TAMANHO_DA_MATRIZ)
     
@@ -115,9 +110,9 @@ def main():
     (sinal_paralelo, log_determinante_paralelo) = trabalhador_para_determinante.calcular_log_determinante(matriz_principal)
     tempo_determinante_paralelo = time.perf_counter() - inicio_calculo_paralelo
 
-    trabalhador_para_inversa = grupo_de_trabalhadores.obter_trabalhador()
+    trabalhador_inversa = grupo_de_trabalhadores.obter_trabalhador()
     inicio_calculo_paralelo = time.perf_counter()
-    inversa_paralela = trabalhador_para_inversa.calcular_inversa(matriz_principal)
+    inversa_paralela = trabalhador_inversa.calcular_inversa(matriz_principal)
     tempo_inversa_paralelo = time.perf_counter() - inicio_calculo_paralelo
     print(f"Log-Determinante Paralelo: {tempo_determinante_paralelo:.6f}s | Inversa Paralela: {tempo_inversa_paralelo:.6f}s")
 
@@ -131,7 +126,7 @@ def main():
     aceleracao_determinante = tempo_determinante_serial / tempo_determinante_paralelo if tempo_determinante_paralelo > 0 else 0
     aceleracao_inversa = tempo_inversa_serial / tempo_inversa_paralelo if tempo_inversa_paralelo > 0 else 0
 
-    determinante_formatado_paralelo = formatar_determinante_exibicao(sinal_paralelo, log_determinante_paralelo)
+    determinante_formatado_paralelo = formatar_determinante_para_exibicao(sinal_paralelo, log_determinante_paralelo)
 
     conteudo_relatorio = f"""
 ============================================================
